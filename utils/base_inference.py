@@ -1,23 +1,26 @@
-def inference_mmpretrain(images, config, checkpoint, device='cuda:0'):
+import numpy as np
+from .misc import blockPrint, enablePrint
+
+
+
+def inference_mmpretrain(images, inferencer):
     '''
     Run inference on images with a trained classification model from mmpretrain.
 
     Arguments:
-    - image [list(str)]: list of paths to images to run inference on
-    - config [str]: path to config file of model
-    - checkpoint [str]: path to trained weights of model
-    - device [str]: device to run inference on
+    - images [list(str)]: list of paths to images to run inference on
+    - inferencer [mmpretrain.ImageClassificationInferencer]: loaded classification model 
+
+    Outputs:
+    - scores [np.array]: predicted scores for all classes for each image (N_images, N_classes)
     '''
-    from mmpretrain import ImageClassificationInferencer
-
-    inferencer = ImageClassificationInferencer(
-        model=config,
-        pretrained=checkpoint,
-        device=device
-    )
     
+    blockPrint()
     results = inferencer(images)
+    enablePrint()
 
-    scores = 
+    scores = [res['pred_scores'] for res in results]
+    scores = np.array(scores)
 
     return scores
+

@@ -30,7 +30,7 @@ def compute_conformity_scores(scores, l=0., kreg=0.):
 
 
 
-def calibrate_cp_threshold(scores, gt_labels, alpha, l=0., kreg=0.)
+def calibrate_cp_threshold(scores, gt_labels, alpha, l=0., kreg=0.):
     '''
     Calibrate the conformity-score threshold for a given significance level.
 
@@ -62,20 +62,26 @@ def get_prediction_set(scores, threshold, l=0., kreg=0., gt_labels=None):
     - gt_labels [np.array]: ground-truth class id of every images/bboxes (N_images). Provide if running validation, otherwise set to 'None'
 
     Output:
-    - prediction_set_list [list(list(int))]: predicted class indices for each image/bbox
+    - prediction_set_list [list(np.array)]: predicted class indices for each image/bbox
     - ranking_list [list(int)]: ranking of true classe's score, for each image/bbox (only returned if running validation)
     '''
     conformity_scores, sorted_idxs = compute_conformity_scores(scores, l=l, kreg=kreg)
     prediction_set_list = []
     ranking_list = []
-    for cs, idxs in zip(conformity_scores, sorted_idxs): #loop over samples
+    covered_list = []
+    size_list = []
+    for cs, idxs, gt_label in zip(conformity_scores, sorted_idxs, gt_labels): #loop over samples
         prediction_set = idxs[cs<=threshold]
+        if len(prediction_set)==0:
+            prediction_set = np.array([idxs[0]])
         prediction_set_list.append(prediction_set)
-
+            
         if gt_labels is not None:
             ranking_list.append(np.where(idxs==gt_label)[0].item())
+            covered_list.append(gt_label.item() in prediction_set)
+            size_list.append(len(prediction_set))
 
     if gt_labels is not None:
-        return prediction_set_list, ranking_list
+        return prediction_set_list, np.array(ranking_list), np.array(covered_list), np.array(size_list)
     else:
         return prediction_set_list
