@@ -1,7 +1,7 @@
 import argparse
 import glob, os, tqdm
 import numpy as np
-from utils import inference_mmpretrain, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint
+from utils import inference_mmpretrain, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint, plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size
 from mmengine.config import Config
 from mmengine.runner import Runner
 from mmpretrain import ImageClassificationInferencer
@@ -52,20 +52,28 @@ def main(args):
     # calibration
     calib_loader = runner.val_dataloader
     scores, gt_labels = predict(calib_loader, inferencer)    
-    cs_thr = calibrate_cp_threshold(scores, gt_labels, args.alpha, l=args.l, kreg=args.kreg)
+    cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores, gt_labels, args.alpha, l=args.l, kreg=args.kreg)
     print(cs_thr)
 
 
     # validation
     test_loader = runner.test_dataloader
+    classes = test_loader.dataset.CLASSES
     scores, gt_labels = predict(test_loader, inferencer)
-    prediction_set_list, ranking, covered, size = get_prediction_set(scores, cs_thr, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
+    prediction_set_list, size, credibility, confidence, ranking, covered = get_prediction_set(scores, cs_thr, true_class_conformity_scores, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
+
+    np.save(f'{args.outpath}/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
 
     argmax = scores.argmax(axis=1)
     print(compute_accuracy(argmax,gt_labels))
     print(covered.sum() / len(covered))
     print(np.unique(size, return_counts=True))
 
+    plot_uncertainty_vs_difficulty('size', ranking, size, gt_labels, classes, args.outpath)
+    plot_uncertainty_vs_difficulty('credibility', ranking, credibility, gt_labels, classes, args.outpath)
+    plot_uncertainty_vs_difficulty('confidence', ranking, confidence, gt_labels, classes, args.outpath)
+    plot_coverage_per_class(covered, gt_labels, classes, args.alpha, args.outpath)
+    plot_coverage_vs_size(size, covered, gt_labels, classes, args.alpha, args.outpath)
 
 
 if __name__ == "__main__":
