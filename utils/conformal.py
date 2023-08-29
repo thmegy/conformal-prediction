@@ -91,11 +91,6 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
         if gt_labels is not None:
             ranking_list.append(np.where(idxs==gt_label)[0].item())
             covered_list.append(gt_label.item() in prediction_set)
-
-        if np.where(idxs==gt_label)[0].item() > 0:
-            print(cs[0], cs[1])
-            print((calib_cs_distrib > cs[0]).sum() / len(calib_cs_distrib), (calib_cs_distrib < cs[1]).sum() / len(calib_cs_distrib))
-            print('')
             
     if gt_labels is not None:
         return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list), np.array(ranking_list), np.array(covered_list)
