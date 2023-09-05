@@ -14,21 +14,22 @@ def predict(dataloader, detector):
     '''
     predictions = []
     num_gts_list = []
-    for images in tqdm.tqdm(dataloader):
-        pred, num_gts = inference_mmdet(images, detector)
+    for i, images in enumerate(tqdm.tqdm(dataloader)):
+        pred, gt_bboxes_list, num_gts = inference_mmdet(images, detector)
         predictions += pred
         num_gts_list += num_gts
 
-
+    bboxes_list = []
     gt_labels_list = []
     gt_inds_list = []
     scores_list = []
     for pred in predictions:
-        scores_list.append(pred.scores.cpu().detach().numpy())
-        gt_labels_list.append(pred.gt_labels.cpu().detach().numpy())
-        gt_inds_list.append(pred.gt_inds.cpu().detach().numpy())
+        bboxes_list.append(pred.bboxes.cpu().detach().tolist())
+        scores_list.append(pred.scores.cpu().detach().tolist())
+        gt_labels_list.append(pred.gt_labels.cpu().detach().tolist())
+        gt_inds_list.append(pred.gt_inds.cpu().detach().tolist())
         
-    return scores_list, gt_labels_list, gt_inds_list, num_gts_list
+    return bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, num_gts_list
 
 
 
@@ -55,15 +56,21 @@ def main(args):
     if args.skip_inference:
         with open(f'{args.outpath}/results_inference_calib.json', 'r') as fin:
             res_dict = json.load(fin)
-            scores_list, gt_labels_list, gt_inds_list, num_gts_list = res_dict['scores'], res_dict['gt_labels'], res_dict['gt_inds'], res_dict['num_gt']
+            bboxes_list = res_dict['bboxes']
+            scores_list = res_dict['scores']
+            gt_labels_list = res_dict['gt_labels']
+            gt_inds_list = res_dict['gt_inds']
+            num_gts_list = res_dict['num_gt']
 
     else:
-        scores_list, gt_labels_list, gt_inds_list, num_gts_list = predict(calib_loader, detector)    
+        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, num_gts_list = predict(calib_loader, detector)
         with open(f'{args.outpath}/results_inference_calib.json', 'w') as fout:
             results = {
-                'scores' : [s.tolist() for s in scores_list],
-                'gt_labels' : [s.tolist() for s in gt_labels_list],
-                'gt_inds' : [s.tolist() for s in gt_inds_list],
+                'bboxes' : bboxes_list,
+                'scores' : scores_list,
+                'gt_labels' : gt_labels_list,
+                'gt_inds' : gt_inds_list,
+                'gt_bboxes' : gt_bboxes_list,
                 'num_gt' : num_gts_list
             }
             json.dump(results, fout, indent = 6)

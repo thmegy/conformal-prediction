@@ -52,12 +52,42 @@ def inference_mmdet(images, detector):
     # extract GT bboxes
     targets = mmdet.models.utils.unpack_gt_instances(img_batch['data_samples'])
 
+    gt_bboxes_list = []
+    for im in targets[0]:
+        gt_bboxes_list.append(im.bboxes.cpu().detach().tolist())
+        
+    
     # get bboxes and corresponding scores and ground truth, filtered by score and nms
     predictions, num_gts = predict_by_feat(detector, targets, *results, batch_img_metas=batch_img_metas, rescale=True)
 
-    return predictions, num_gts
+#    print_bboxes(targets[0][0]['bboxes'].cpu().detach().numpy(),
+#                 predictions[0]['bboxes'].cpu().detach().numpy(),
+#                 predictions[0]['gt_labels'].cpu().detach().numpy(),
+#                 targets[2][0]['img_path']
+#                 )
+
+    return predictions, gt_bboxes_list, num_gts
 
 
+
+def print_bboxes(target_bboxes, pred_bboxes, pred_labels, name):
+    import cv2
+    image = cv2.imread(name)
+    name = name.split('/')[-1]
+    
+    for tbox in target_bboxes:
+        cv2.rectangle(image, tbox[:2].astype(int), tbox[2:].astype(int), (0,0,255), 5)
+
+    for pbox, plab in zip(pred_bboxes, pred_labels):
+        if plab == -1:
+            cv2.rectangle(image, pbox[:2].astype(int), pbox[2:].astype(int), (255,0,0), 5)
+        else:
+            cv2.rectangle(image, pbox[:2].astype(int), pbox[2:].astype(int), (0,255,0), 5)
+
+    cv2.imwrite(f'test/{name}', image)
+
+
+    
 
 def predict_by_feat(model, targets, cls_scores, bbox_preds, score_factors = None,
                     batch_img_metas = None, cfg = None,
