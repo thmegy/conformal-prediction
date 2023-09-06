@@ -55,8 +55,11 @@ def inference_mmdet(images, detector):
     gt_bboxes_list = []
     for im in targets[0]:
         gt_bboxes_list.append(im.bboxes.cpu().detach().tolist())
-        
-    
+
+    shape_list = []
+    for im in targets[2]:
+        shape_list.append(im['ori_shape'])
+            
     # get bboxes and corresponding scores and ground truth, filtered by score and nms
     predictions, num_gts = predict_by_feat(detector, targets, *results, batch_img_metas=batch_img_metas, rescale=True)
 
@@ -66,7 +69,7 @@ def inference_mmdet(images, detector):
 #                 targets[2][0]['img_path']
 #                 )
 
-    return predictions, gt_bboxes_list, num_gts
+    return predictions, gt_bboxes_list, shape_list, num_gts
 
 
 
