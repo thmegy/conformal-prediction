@@ -83,14 +83,15 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
     credibility_list = []
     confidence_list = []
     for cs, idxs, gt_label, score in zip(conformity_scores, sorted_idxs, gt_labels, scores): #loop over samples
-        n_selected = (cs<=threshold).sum() + 1
+        score = score[idxs] # sort scores in descending order
         
+        n_selected = (cs<=threshold).sum() + 1
         # add random component
         U = np.random.random()
         reg = np.clip( l * (n_selected-kreg), 0, None )
         overshoot_ratio = (cs[n_selected-1] + reg - threshold) / (score[n_selected-1] + l * (n_selected > kreg) )
         # overshoot_ratio: how much conformity score the class that is just above threshold overshoots the threshold, relatively to the class prediction score
-        if overshoot_ratio <+ U:
+        if overshoot_ratio >= U:
             n_selected -= 1        
         
         prediction_set = idxs[:n_selected]
