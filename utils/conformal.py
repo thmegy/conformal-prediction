@@ -25,7 +25,6 @@ def compute_conformity_scores(scores, l=0., kreg=0.):
     conformity_score = np.cumsum(sorted_scores, axis=1)
     
     reg = np.clip( l * (np.arange(1,scores.shape[1]+1)-kreg), 0, None )
-    
     conformity_score += reg
 
     return conformity_score, sorted_idxs
@@ -48,6 +47,11 @@ def calibrate_cp_threshold(scores, gt_labels, alpha, l=0., kreg=0.):
     conformity_scores, sorted_idxs = compute_conformity_scores(scores, l=l, kreg=kreg)
     image_id, true_class_ranking = np.where( sorted_idxs==np.expand_dims(gt_labels, axis=1) )
     true_class_conformity_scores = conformity_scores[image_id, true_class_ranking] # conformity score of each image's true class
+
+    # add random component
+    U = np.random.random(true_class_conformity_scores.shape[0])
+    true_class_conformity_scores -= U*scores[np.arange(scores.shape[0]), gt_labels]
+
     cs_thr = np.quantile(true_class_conformity_scores, 1-alpha, method='higher')
     
     return cs_thr, true_class_conformity_scores
@@ -78,8 +82,18 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
     size_list = []
     credibility_list = []
     confidence_list = []
-    for cs, idxs, gt_label in zip(conformity_scores, sorted_idxs, gt_labels): #loop over samples
-        prediction_set = idxs[cs<=threshold]
+    for cs, idxs, gt_label, score in zip(conformity_scores, sorted_idxs, gt_labels, scores): #loop over samples
+        n_selected = (cs<=threshold).sum() + 1
+        
+        # add random component
+        U = np.random.random()
+        reg = np.clip( l * (n_selected-kreg), 0, None )
+        overshoot_ratio = (cs[n_selected-1] + reg - threshold) / (score[n_selected-1] + l * (n_selected > kreg) )
+        # overshoot_ratio: how much conformity score the class that is just above threshold overshoots the threshold, relatively to the class prediction score
+        if overshoot_ratio <+ U:
+            n_selected -= 1        
+        
+        prediction_set = idxs[:n_selected]
         if len(prediction_set)==0:
             prediction_set = np.array([idxs[0]])
         prediction_set_list.append(prediction_set)
