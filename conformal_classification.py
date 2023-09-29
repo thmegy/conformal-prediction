@@ -1,7 +1,7 @@
 import argparse
 import glob, os, tqdm
 import numpy as np
-from utils import inference_mmpretrain, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint, plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size
+from utils import inference_mmpretrain, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint, plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size, plot_confusion_matrix
 from mmengine.config import Config
 from mmengine.runner import Runner
 from mmpretrain import ImageClassificationInferencer
@@ -60,7 +60,7 @@ def main(args):
     test_loader = runner.test_dataloader
     classes = test_loader.dataset.CLASSES
     scores, gt_labels = predict(test_loader, inferencer)
-    prediction_set_list, size, credibility, confidence, ranking, covered = get_prediction_set(scores, cs_thr, true_class_conformity_scores, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
+    prediction_set_list, size, credibility, confidence, ranking, covered, confusion_matrix = get_prediction_set(scores, cs_thr, true_class_conformity_scores, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
 
     np.save(f'{args.outpath}/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
 
@@ -74,6 +74,7 @@ def main(args):
     plot_uncertainty_vs_difficulty('confidence', ranking, confidence, gt_labels, classes, args.outpath)
     plot_coverage_per_class(covered, gt_labels, classes, args.alpha, args.outpath)
     plot_coverage_vs_size(size, covered, gt_labels, classes, args.alpha, args.outpath)
+    plot_confusion_matrix(confusion_matrix, len(ranking), classes, args.outpath)
 
 
 if __name__ == "__main__":

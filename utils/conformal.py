@@ -82,6 +82,8 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
     size_list = []
     credibility_list = []
     confidence_list = []
+    confusion_matrix = np.zeros((scores.shape[1],scores.shape[1]))
+
     for cs, idxs, gt_label, score in zip(conformity_scores, sorted_idxs, gt_labels, scores): #loop over samples
         score = score[idxs] # sort scores in descending order
         
@@ -102,15 +104,20 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
         size_list.append(len(prediction_set))
         credibility_list.append( (calib_cs_distrib > cs[0]).sum() / len(calib_cs_distrib) )
         confidence_list.append( (calib_cs_distrib < cs[1]).sum() / len(calib_cs_distrib) )
-        
+
+        # fill confusion matrix --> which classes are associated together in prediction sets
+        prediction_set_vector = np.zeros(scores.shape[1])
+        prediction_set_vector[prediction_set] = 1
+        confusion_matrix[prediction_set] += prediction_set_vector
+
         if gt_labels is not None:
             ranking_list.append(np.where(idxs==gt_label)[0].item())
             covered_list.append(gt_label.item() in prediction_set)
             
     if gt_labels is not None:
-        return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list), np.array(ranking_list), np.array(covered_list)
+        return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list), np.array(ranking_list), np.array(covered_list), confusion_matrix
     else:
-        return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list)
+        return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list), confusion_matrix
 
 
     ######################################################################################################################################################################################
@@ -238,7 +245,7 @@ def plot_coverage_vs_size(size, covered, target, classes, alpha, outpath):
     ax.scatter(size_list-0.45, coverage_list, 500*n_sample/n_sample.sum(), color='black', marker='o', label=f'Overall ({n_sample.sum()})')
     ax.plot([0.4, max(size_list)+0.5], [1-alpha, 1-alpha], color='red', linestyle='--', linewidth=1)
 
-    # coverage per class
+#    # coverage per class
 #    markerstyle = ["p", "p", "p", "p", "p", "p", "p", "s", "p", "s", "s", "s", "*"]
 #    for icls, cls in enumerate(classes):
 #        mask = (target == icls)
@@ -253,3 +260,37 @@ def plot_coverage_vs_size(size, covered, target, classes, alpha, outpath):
     fig.set_tight_layout(True)
     fig.savefig(f'{outpath}/coverage_vs_size.png')
     
+
+
+def plot_confusion_matrix(confusion_matrix, n_sample, classes, outpath):
+    '''
+    Plot confusion matrix, which explains which classes are associated together in prediction sets.
+    '''
+    matrix_normalised = (confusion_matrix.T / np.diag(confusion_matrix)).T
+
+    fig, ax = plt.subplots(1,2, sharey=True, gridspec_kw={'width_ratios':(0.7,12), 'wspace':0.05}, figsize=(16,11))
+    opts = {'cmap': 'Greens', 'vmin': 0, 'vmax': +1}
+
+    fraction_bboxes = (np.diag(confusion_matrix) / n_sample).reshape(len(classes),1)
+    ax[0].pcolor( fraction_bboxes, **opts)
+    for irow in range(fraction_bboxes.shape[0]):
+        for icol in range(fraction_bboxes.shape[1]):
+            ax[0].text(icol+0.5, irow+0.5, '{:.2f}'.format(fraction_bboxes[irow][icol]),
+                       ha="center", va="center", color="black")
+            ax[0].set_xticks([0.5])
+            ax[0].set_xticklabels(['fraction of bboxes'], rotation=45, ha='right')
+
+    heatmap = ax[1].pcolor(matrix_normalised, **opts)
+    for irow in range(matrix_normalised.shape[0]):
+        for icol in range(matrix_normalised.shape[1]):
+            ax[1].text(icol+0.5, irow+0.5, '{:.2f}'.format(matrix_normalised[irow][icol]),
+                       ha="center", va="center", color="black")
+
+    ax[1].set_yticks(np.arange(0.5, matrix_normalised.shape[0], 1))
+    ax[1].set_yticklabels(classes)
+    ax[1].set_xticks(np.arange(0.5, matrix_normalised.shape[0], 1))
+    ax[1].set_xticklabels(classes, rotation=45, ha='right')
+
+    cbar = fig.colorbar(heatmap)
+#    fig.set_tight_layout(True)
+    fig.savefig(f'{outpath}/confusion_matrix.png')
