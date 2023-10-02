@@ -1,5 +1,5 @@
 import argparse
-import glob, os, tqdm, json
+import glob, os, tqdm, json, sys
 import numpy as np
 from utils import inference_mmdet, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint, plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size
 from mmengine.config import Config
@@ -65,13 +65,53 @@ def boxwise_fnr(scores_list, gt_inds_list, num_gts_list, score_thrs):
 
 
 
-def pixelwise_fnr():
+def pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs):
     '''
     Compute False Negative Rate as fraction of ground-truth bboxes not covered by predicted bboxes.
     '''
+    fnr_array = []
+    for i, (pred_bboxes, scores, gt_bboxes, shape) in enumerate(tqdm.tqdm(zip(bboxes_list, scores_list, gt_bboxes_list, shape_list), total=len(bboxes_list))): # loop on images
+        #if i > 100:
+        #    break
+
+        if len(gt_bboxes)==0:
+            continue
+
+        # make 2D map of pixels belonging to predicted bboxes (value of each pixel is the score of the bbox containing the pixel with the highest score)
+        pred_array = np.zeros(shape)
+        for pbox, s in zip(pred_bboxes, scores):
+            x1, y1, x2, y2 = pbox
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+            pred_array_tmp  = np.zeros(shape)
+            pred_array_tmp[y1:y2, x1:x2] = sum(s)
+
+            pred_array = np.where(pred_array_tmp > pred_array, pred_array_tmp, pred_array)
+
+        # make 2D map of pixels belonging to ground-truth bboxes
+        gt_array = np.zeros(shape, dtype=bool)
+        for gtbox in gt_bboxes:
+            x1, y1, x2, y2 = gtbox
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            gt_array[y1:y2, x1:x2] = True
+
+        fnr_list = []
+        for thr in score_thrs:
+            filtered_pred_array = pred_array > thr
+
+            area = gt_array.sum()
+            covered = (filtered_pred_array & gt_array).sum()
+
+            fnr = 1 - covered / area
+            fnr_list.append(fnr)
+
+        fnr_array.append(fnr_list)
+
+    fnr_array = np.array(fnr_array)
+    return fnr_array
 
 
-@profile
+
 def main(args):
     config = Config.fromfile(args.config)
     config.work_dir = 'outputs/conformal_prediction/'
@@ -101,7 +141,6 @@ def main(args):
             gt_bboxes_list = res_dict['gt_bboxes']
             shape_list = res_dict['gt_shape']
             num_gts_list = res_dict['num_gt']
-
     else:
         bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, shape_list, num_gts_list = predict(calib_loader, detector)
         with open(f'{args.outpath}/results_inference_calib.json', 'w') as fout:
@@ -115,65 +154,71 @@ def main(args):
                 'num_gt' : num_gts_list
             }
             json.dump(results, fout, indent = 6)
-
+            
     score_thrs = np.linspace(0,1,21)[1:-1]
 
 
-    fnr_array = []
-    for i, (pred_bboxes, scores, gt_bboxes, shape) in tqdm.tqdm(enumerate(zip(bboxes_list, scores_list, gt_bboxes_list, shape_list))): # loop on images
-        if i > 100:
-            break
-
-        if len(gt_bboxes)==0:
-            continue
-        
-        # make 2D map of pixels belonging to predicted bboxes (value of each pixel is the score of the bbox containing the pixel with the highest score)
-        pred_array = np.zeros(shape)
-        for pbox, s in zip(pred_bboxes, scores):
-            x1, y1, x2, y2 = pbox
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    if args.skip_fnr_computation:
+        fnr_array = np.load(f'{args.outpath}/fnr_calib_pixelwise.npy')
+    else:
+        if args.fnr_type=='pixel':
+            fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs)
+        elif args.fnr_type=='box':
+            fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, score_thrs)
             
-            pred_array_tmp  = np.zeros(shape)
-            pred_array_tmp[y1:y2, x1:x2] = sum(s)
+        fnr_array = np.array(fnr_array)
+        with open(f'{args.outpath}/fnr_calib_{args.fnr_type}wise.npy', 'wb') as fout:
+            np.save(fout, fnr_array)
 
-            pred_array = np.where(pred_array_tmp > pred_array, pred_array_tmp, pred_array)
-
-        fnr_list = []
-        for thr in score_thrs:
-            filtered_pred_array = pred_array > thr
-
-            area = 0
-            covered = 0
-            for gtbox in gt_bboxes:
-                x1, y1, x2, y2 = gtbox
-                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                covered += filtered_pred_array[y1:y2, x1:x2].sum()
-                area += (x2-x1) * (y2-y1)
-                
-            fnr = 1 - covered / area
-            fnr_list.append(fnr)
-
-        fnr_array.append(fnr_list)
-            
-        
-
-            
+    print(fnr_array)
     # conformal risk control
     n = fnr_array.shape[0]
     b = 1
-    score_thr_arg = np.where( (fnr_array.mean(axis=0)*n + b) / (n+1) <= args.alpha )[0][-1]
+    modified_fnr = (fnr_array.mean(axis=0)*n + b) / (n+1) # formula from Conformal Risk Control paper
+    score_thr_args = np.where( modified_fnr <= args.alpha )[0]
+    if len(score_thr_args)==0:
+        print(f'Minimum modified FNR = {modified_fnr.min():.3f}. It is larger than the chosen significance level alpha = {args.alpha}.')
+        sys.exit('Exiting')
+    score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
     print(score_thr_arg, score_thr)
 
 
+    # validation
+    if args.skip_inference:
+        with open(f'{args.outpath}/results_inference_test.json', 'r') as fin:
+            res_dict = json.load(fin)
+            bboxes_list = res_dict['bboxes']
+            scores_list = res_dict['scores']
+            gt_labels_list = res_dict['gt_labels']
+            gt_inds_list = res_dict['gt_inds']
+            gt_bboxes_list = res_dict['gt_bboxes']
+            shape_list = res_dict['shape']
+            num_gts_list = res_dict['num_gt']
+    else:
+        test_loader = runner.test_dataloader
+        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, shape_list, num_gts_list = predict(test_loader, detector)
+        with open(f'{args.outpath}/results_inference_test.json', 'w') as fout:
+            results = {
+                'bboxes' : bboxes_list,
+                'scores' : scores_list,
+                'gt_labels' : gt_labels_list,
+                'gt_inds' : gt_inds_list,
+                'gt_bboxes' : gt_bboxes_list,
+                'shape' : shape_list,
+                'num_gt' : num_gts_list
+            }
+            json.dump(results, fout, indent = 6)
 
-#    cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores, gt_labels, args.alpha, l=args.l, kreg=args.kreg)
-#    print(cs_thr)
-#
-#
-#    # validation
-#    test_loader = runner.test_dataloader
-#    classes = test_loader.dataset.CLASSES
+    if args.fnr_type=='pixel':
+        fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, [score_thr])
+    elif args.fnr_type=='box':
+        fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, [score_thr])
+
+    fnr_array = np.array(fnr_array)
+
+    print(fnr_array.mean(axis=0))
+
 #    scores, gt_labels = predict(test_loader, inferencer)
 #    prediction_set_list, size, credibility, confidence, ranking, covered = get_prediction_set(scores, cs_thr, true_class_conformity_scores, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
 #
@@ -204,7 +249,11 @@ if __name__ == "__main__":
     parser.add_argument("--l", type=float, default=0., help="lambda parameter for regularisation of conformality score")
     parser.add_argument("--kreg", type=float, default=0., help="kreg parameter for regularisation of conformality score")
 
+    parser.add_argument("--fnr-type", choices=['pixel', 'box'], required=True, help="pixelwise or boxwise False Negative Rate")
+
     parser.add_argument("--skip-inference", action='store_true', help="Skip inference. Load results previously saved.")
+    parser.add_argument("--skip-fnr-computation", action='store_true', help="Skip determination of False Negative Rate. Load results previously saved.")
+
 #    parser.add_argument("--per-class-thr", action='store_true', help="Determine and apply per-class conformity-score thresholds.")
     
 #    parser.add_argument('--post-process', action='store_true', help='Make summary plots without processing videos again.')
