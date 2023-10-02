@@ -178,7 +178,7 @@ test_cfg = dict(type='TestLoop')
 test_dataloader = dict(
     batch_size=1,
     dataset=dict(
-        ann_file='signs_val.json',
+        ann_file='signs_test.json',
         backend_args=None,
         data_prefix=dict(img='images/'),
         data_root='/home/theo/workdir/mmdet/data/mapillary_traffic_signs/',
@@ -211,7 +211,7 @@ test_dataloader = dict(
     persistent_workers=True,
     sampler=dict(shuffle=False, type='DefaultSampler'))
 test_evaluator = dict(
-    ann_file='/home/theo/workdir/mmdet/data/mapillary_traffic_signs/signs_val.json',
+    ann_file='/home/theo/workdir/mmdet/data/mapillary_traffic_signs/signs_test.json',
     backend_args=None,
     classwise=True,
     format_only=False,
