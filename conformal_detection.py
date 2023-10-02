@@ -14,17 +14,19 @@ def predict(dataloader, detector):
     '''
     predictions = []
     gt_bboxes_list = []
+    gt_labels_list_full = [] # all gt-bboxes
     shape_list = []
     num_gts_list = []
     for i, images in enumerate(tqdm.tqdm(dataloader)):
-        pred, gt_bboxes, shape, num_gts = inference_mmdet(images, detector)
+        pred, gt_bboxes, gt_labels, shape, num_gts = inference_mmdet(images, detector)
         predictions += pred
         gt_bboxes_list += gt_bboxes
+        gt_labels_list_full += gt_labels
         shape_list += shape
         num_gts_list += num_gts
 
     bboxes_list = []
-    gt_labels_list = []
+    gt_labels_list = [] # only gt-bboxes matched to predicted bboxes
     gt_inds_list = []
     scores_list = []
     for pred in predictions:
@@ -33,7 +35,7 @@ def predict(dataloader, detector):
         gt_labels_list.append(pred.gt_labels.cpu().detach().tolist())
         gt_inds_list.append(pred.gt_inds.cpu().detach().tolist())
         
-    return bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, shape_list, num_gts_list
+    return bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list
 
 
 
@@ -95,11 +97,13 @@ def pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_th
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             gt_array[y1:y2, x1:x2] = True
 
+        area = gt_array.sum()
+        if area==0:
+            continue
+
         fnr_list = []
         for thr in score_thrs:
             filtered_pred_array = pred_array > thr
-
-            area = gt_array.sum()
             covered = (filtered_pred_array & gt_array).sum()
 
             fnr = 1 - covered / area
@@ -109,6 +113,33 @@ def pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_th
 
     fnr_array = np.array(fnr_array)
     return fnr_array
+
+
+
+def multilabel_fnr(scores_list, gt_labels_list_full, score_thrs):
+    fnr_array = []
+    for scores, gt_labels in zip(scores_list, gt_labels_list_full):
+        if len(gt_labels)==0:
+            continue
+
+        scores = np.array(scores)
+        if len(scores)==0: # no predicted bboxes
+            fnr_list = [1 for _ in score_thrs]
+        else:
+            max_scores = scores.max(axis=1)
+            pred_labels = scores.argmax(axis=1)
+            
+            fnr_list = []
+            for thr in score_thrs:
+                unique_pred_labels = np.unique(pred_labels[max_scores>thr])
+                covered_bool = np.isin(gt_labels, unique_pred_labels)
+                fnr_list.append(1 - covered_bool.sum() / len(covered_bool))
+
+            fnr_array.append(fnr_list)
+
+    fnr_array = np.array(fnr_array)
+    return fnr_array
+    
 
 
 
@@ -139,10 +170,11 @@ def main(args):
             gt_labels_list = res_dict['gt_labels']
             gt_inds_list = res_dict['gt_inds']
             gt_bboxes_list = res_dict['gt_bboxes']
-            shape_list = res_dict['gt_shape']
+            gt_labels_list_full = res_dict['gt_labels_full']
+            shape_list = res_dict['shape']
             num_gts_list = res_dict['num_gt']
     else:
-        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, shape_list, num_gts_list = predict(calib_loader, detector)
+        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list = predict(calib_loader, detector)
         with open(f'{args.outpath}/results_inference_calib.json', 'w') as fout:
             results = {
                 'bboxes' : bboxes_list,
@@ -150,6 +182,7 @@ def main(args):
                 'gt_labels' : gt_labels_list,
                 'gt_inds' : gt_inds_list,
                 'gt_bboxes' : gt_bboxes_list,
+                'gt_labels_full' : gt_labels_list_full,
                 'shape' : shape_list,
                 'num_gt' : num_gts_list
             }
@@ -159,12 +192,14 @@ def main(args):
 
 
     if args.skip_fnr_computation:
-        fnr_array = np.load(f'{args.outpath}/fnr_calib_pixelwise.npy')
+        fnr_array = np.load(f'{args.outpath}/fnr_calib_{args.fnr_type}wise.npy')
     else:
         if args.fnr_type=='pixel':
             fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs)
         elif args.fnr_type=='box':
             fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, score_thrs)
+        elif args.fnr_type=='multilabel':
+            fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, score_thrs)
             
         fnr_array = np.array(fnr_array)
         with open(f'{args.outpath}/fnr_calib_{args.fnr_type}wise.npy', 'wb') as fout:
@@ -193,11 +228,12 @@ def main(args):
             gt_labels_list = res_dict['gt_labels']
             gt_inds_list = res_dict['gt_inds']
             gt_bboxes_list = res_dict['gt_bboxes']
+            gt_labels_list_full = res_dict['gt_labels_full']
             shape_list = res_dict['shape']
             num_gts_list = res_dict['num_gt']
     else:
         test_loader = runner.test_dataloader
-        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, shape_list, num_gts_list = predict(test_loader, detector)
+        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list = predict(test_loader, detector)
         with open(f'{args.outpath}/results_inference_test.json', 'w') as fout:
             results = {
                 'bboxes' : bboxes_list,
@@ -205,6 +241,7 @@ def main(args):
                 'gt_labels' : gt_labels_list,
                 'gt_inds' : gt_inds_list,
                 'gt_bboxes' : gt_bboxes_list,
+                'gt_labels_full' : gt_labels_list_full,
                 'shape' : shape_list,
                 'num_gt' : num_gts_list
             }
@@ -214,6 +251,8 @@ def main(args):
         fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, [score_thr])
     elif args.fnr_type=='box':
         fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, [score_thr])
+    elif args.fnr_type=='multilabel':
+        fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, [score_thr])
 
     fnr_array = np.array(fnr_array)
 
@@ -249,7 +288,7 @@ if __name__ == "__main__":
     parser.add_argument("--l", type=float, default=0., help="lambda parameter for regularisation of conformality score")
     parser.add_argument("--kreg", type=float, default=0., help="kreg parameter for regularisation of conformality score")
 
-    parser.add_argument("--fnr-type", choices=['pixel', 'box'], required=True, help="pixelwise or boxwise False Negative Rate")
+    parser.add_argument("--fnr-type", choices=['pixel', 'box', 'multilabel'], required=True, help="pixelwise or boxwise False Negative Rate")
 
     parser.add_argument("--skip-inference", action='store_true', help="Skip inference. Load results previously saved.")
     parser.add_argument("--skip-fnr-computation", action='store_true', help="Skip determination of False Negative Rate. Load results previously saved.")

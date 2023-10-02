@@ -53,8 +53,10 @@ def inference_mmdet(images, detector):
     targets = mmdet.models.utils.unpack_gt_instances(img_batch['data_samples'])
 
     gt_bboxes_list = []
+    gt_labels_list = []
     for im in targets[0]:
         gt_bboxes_list.append(im.bboxes.cpu().detach().tolist())
+        gt_labels_list.append(im.labels.cpu().detach().tolist())
 
     shape_list = []
     for im in targets[2]:
@@ -69,7 +71,7 @@ def inference_mmdet(images, detector):
 #                 targets[2][0]['img_path']
 #                 )
 
-    return predictions, gt_bboxes_list, shape_list, num_gts
+    return predictions, gt_bboxes_list, gt_labels_list, shape_list, num_gts
 
 
 
