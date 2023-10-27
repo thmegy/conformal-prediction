@@ -88,15 +88,18 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
         score = score[idxs] # sort scores in descending order
         
         n_selected = (cs<=threshold).sum() + 1
-        # add random component
-        U = np.random.random()
-        reg = np.clip( l * (n_selected-kreg), 0, None )
-        overshoot_ratio = (cs[n_selected-1] + reg - threshold) / (score[n_selected-1] + l * (n_selected > kreg) )
-        # overshoot_ratio: how much conformity score the class that is just above threshold overshoots the threshold, relatively to the class prediction score
-        if overshoot_ratio >= U:
-            n_selected -= 1        
+        if n_selected > len(score): # prediction set contains all classes
+            prediction_set = idxs[:n_selected-1]
+        else:
+            # add random component
+            U = np.random.random()
+            reg = np.clip( l * (n_selected-kreg), 0, None )
+            overshoot_ratio = (cs[n_selected-1] + reg - threshold) / (score[n_selected-1] + l * (n_selected > kreg) )
+            # overshoot_ratio: how much conformity score the class that is just above threshold overshoots the threshold, relatively to the class prediction score
+            if overshoot_ratio >= U:
+                n_selected -= 1        
         
-        prediction_set = idxs[:n_selected]
+            prediction_set = idxs[:n_selected]
         if len(prediction_set)==0:
             prediction_set = np.array([idxs[0]])
         prediction_set_list.append(prediction_set)
@@ -110,7 +113,7 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
         prediction_set_vector[prediction_set] = 1
         confusion_matrix[prediction_set] += prediction_set_vector
 
-        if gt_labels is not None:
+        if gt_labels is not None and gt_label!=-1:
             ranking_list.append(np.where(idxs==gt_label)[0].item())
             covered_list.append(gt_label.item() in prediction_set)
             

@@ -1,10 +1,14 @@
 import argparse
 import glob, os, tqdm, json, sys
 import numpy as np
-from utils import inference_mmdet, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint, plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size
+from utils import inference_mmdet, compute_conformity_scores, calibrate_cp_threshold, get_prediction_set, blockPrint, enablePrint
+from utils import plot_uncertainty_vs_difficulty, plot_coverage_per_class, plot_coverage_vs_size, plot_confusion_matrix
 from mmengine.config import Config
 from mmengine.runner import Runner
 import mmdet.apis
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+mpl.use('Agg')
 
 
 
@@ -258,22 +262,108 @@ def main(args):
 
     print(fnr_array.mean(axis=0))
 
-#    scores, gt_labels = predict(test_loader, inferencer)
-#    prediction_set_list, size, credibility, confidence, ranking, covered = get_prediction_set(scores, cs_thr, true_class_conformity_scores, l=args.l, kreg=args.kreg, gt_labels=gt_labels)
-#
-#    np.save(f'{args.outpath}/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
-#
+
+    
+    ## Apply cp to remaining bboxes
+    with open(f'{args.outpath}/results_inference_calib.json', 'r') as fin:
+        res_dict = json.load(fin)
+        scores_list = res_dict['scores']
+        gt_labels_list = res_dict['gt_labels']
+
+    scores = []
+    gt_labels = []
+    for s, l in zip(scores_list, gt_labels_list):
+        scores += s
+        gt_labels += l
+    
+    scores = np.array(scores)
+    gt_labels = np.array(gt_labels)
+
+    mask_score_sum = (scores.sum(axis=1) > score_thr)
+    scores_filtered = scores[mask_score_sum]
+    gt_labels_filtered = gt_labels[mask_score_sum]
+
+    mask = gt_labels_filtered != -1
+    print(f'{mask_score_sum.sum()} remaining predicted bboxes in calib dataset')
+    print(f'{mask.sum()} matched, {mask_score_sum.sum()-mask.sum()} unmatched')
+    
+#    empty_class = 1-scores_filtered.sum(axis=1)
+#    scores_filtered = np.hstack((scores_filtered, empty_class.reshape(-1,1)))
+#    gt_labels_filtered[gt_labels_filtered==-1] = 12
+    
+    # apply inverse sigmoid, then softmax to scores
+    scores_filtered = np.log(scores_filtered / (1-scores_filtered))
+    scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
+
+    # calibration    
+    cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores_filtered[mask], gt_labels_filtered[mask], 0.1, l=args.l, kreg=args.kreg)
+    print(f'Conformity score threshold = {cs_thr}')
+
+    # validation
+    with open(f'{args.outpath}/results_inference_test.json', 'r') as fin:
+        res_dict = json.load(fin)
+        scores_list = res_dict['scores']
+        gt_labels_list = res_dict['gt_labels']
+
+    scores = []
+    gt_labels = []
+    for s, l in zip(scores_list, gt_labels_list):
+        scores += s
+        gt_labels += l
+    
+    scores = np.array(scores)
+    gt_labels = np.array(gt_labels)
+
+    mask_score_sum = (scores.sum(axis=1) > score_thr)
+    scores_filtered = scores[mask_score_sum]
+    gt_labels_filtered = gt_labels[mask_score_sum]
+
+    mask = gt_labels_filtered != -1
+    print(f'{mask_score_sum.sum()} remaining predicted bboxes in test dataset')
+    print(f'{mask.sum()} matched, {mask_score_sum.sum()-mask.sum()} unmatched')
+    print('')
+    
+#    empty_class = 1-scores_filtered.sum(axis=1)
+#    scores_filtered = np.hstack((scores_filtered, empty_class.reshape(-1,1)))
+#    gt_labels_filtered[gt_labels_filtered==-1] = 12
+
+    classes = ['0','1','2','3','4','5','6','7','8','9','10','11']
+
+    # apply inverse sigmoid, then softmax to scores
+    scores_filtered = np.log(scores_filtered / (1-scores_filtered))
+    scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
+    
+
+    prediction_set_list, size, credibility, confidence, ranking, covered, confusion_matrix = get_prediction_set(scores_filtered, cs_thr,
+                                                                                                                true_class_conformity_scores, l=args.l,
+                                                                                                                kreg=args.kreg, gt_labels=gt_labels_filtered)
+
+    np.save(f'{args.outpath}/{args.fnr_type}wise-fnr/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
+
 #    argmax = scores.argmax(axis=1)
 #    print(compute_accuracy(argmax,gt_labels))
 #    print(covered.sum() / len(covered))
 #    print(np.unique(size, return_counts=True))
-#
-#    plot_uncertainty_vs_difficulty('size', ranking, size, gt_labels, classes, args.outpath)
-#    plot_uncertainty_vs_difficulty('credibility', ranking, credibility, gt_labels, classes, args.outpath)
-#    plot_uncertainty_vs_difficulty('confidence', ranking, confidence, gt_labels, classes, args.outpath)
-#    plot_coverage_per_class(covered, gt_labels, classes, args.alpha, args.outpath)
-#    plot_coverage_vs_size(size, covered, gt_labels, classes, args.alpha, args.outpath)
 
+    plot_uncertainty_vs_difficulty('size', ranking, size[gt_labels_filtered!=-1], gt_labels_filtered, classes, f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_coverage_per_class(covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_coverage_vs_size(size[gt_labels_filtered!=-1], covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_confusion_matrix(confusion_matrix, len(size), classes, f'{args.outpath}/{args.fnr_type}wise-fnr')
+
+    print(f'average set-size for matched bboxes = {size[mask].mean():.3f}')
+    print(f'average set-size for unmatched bboxes = {size[~mask].mean():.3f}')
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlabel('size')
+    bins = np.arange(size.max())+1
+    ax.hist(size[gt_labels_filtered!=-1], bins=bins, density=True, alpha=0.5, label='matched bboxes')
+    ax.hist(size[gt_labels_filtered==-1], bins=bins, density=True, alpha=0.5, label='unmatched bboxes')
+
+    ax.legend()
+    fig.set_tight_layout(True)
+    fig.savefig(f'{args.outpath}/{args.fnr_type}wise-fnr/size_distribution.png')
+
+    
 
 if __name__ == "__main__":
 
