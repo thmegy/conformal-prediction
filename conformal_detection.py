@@ -30,16 +30,16 @@ def predict(dataloader, detector):
         num_gts_list += num_gts
 
     bboxes_list = []
-    gt_labels_list = [] # only gt-bboxes matched to predicted bboxes
+    gt_labels_list_matched = [] # only gt-bboxes matched to predicted bboxes
     gt_inds_list = []
     scores_list = []
     for pred in predictions:
         bboxes_list.append(pred.bboxes.cpu().detach().tolist())
         scores_list.append(pred.scores.cpu().detach().tolist())
-        gt_labels_list.append(pred.gt_labels.cpu().detach().tolist())
+        gt_labels_list_matched.append(pred.gt_labels.cpu().detach().tolist())
         gt_inds_list.append(pred.gt_inds.cpu().detach().tolist())
         
-    return bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list
+    return bboxes_list, scores_list, gt_labels_list_matched, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list
 
 
 
@@ -143,6 +143,58 @@ def multilabel_fnr(scores_list, gt_labels_list_full, score_thrs):
 
     fnr_array = np.array(fnr_array)
     return fnr_array
+
+
+
+def get_inference(args, loader, dataset):
+    if args.skip_inference:
+        with open(f'{args.outpath}/results_inference_{dataset}.json', 'r') as fin:
+            results = json.load(fin)
+    else:
+        bboxes_list, scores_list, gt_labels_list_matched, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list = predict(loader, detector)
+        with open(f'{args.outpath}/results_inference_{dataset}.json', 'w') as fout:
+            results = {
+                'bboxes' : bboxes_list,
+                'scores' : scores_list,
+                'gt_labels' : gt_labels_list_matched,
+                'gt_inds' : gt_inds_list,
+                'gt_bboxes' : gt_bboxes_list,
+                'gt_labels_full' : gt_labels_list_full,
+                'shape' : shape_list,
+                'num_gt' : num_gts_list
+            }
+            json.dump(results, fout, indent = 6)
+
+    return results
+
+
+
+def get_fnr(args, results, score_thrs, dataset):
+    
+    bboxes_list = results['bboxes']
+    scores_list = results['scores']
+    gt_inds_list = results['gt_inds']
+    gt_bboxes_list = results['gt_bboxes']
+    gt_labels_list_full = results['gt_labels_full']
+    shape_list = results['shape']
+    num_gts_list = results['num_gt']
+            
+    if args.skip_fnr_computation:
+        fnr_array = np.load(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_{dataset}.npy')
+    else:
+        if args.fnr_type=='pixel':
+            fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs)
+        elif args.fnr_type=='box':
+            fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, score_thrs)
+        elif args.fnr_type=='multilabel':
+            fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, score_thrs)
+            
+        fnr_array = np.array(fnr_array)
+        with open(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_{dataset}.npy', 'wb') as fout:
+            np.save(fout, fnr_array)
+
+    return fnr_array
+
     
 
 
@@ -165,51 +217,12 @@ def main(args):
 
     # calibration
     calib_loader = runner.val_dataloader
-
-    if args.skip_inference:
-        with open(f'{args.outpath}/results_inference_calib.json', 'r') as fin:
-            res_dict = json.load(fin)
-            bboxes_list = res_dict['bboxes']
-            scores_list = res_dict['scores']
-            gt_labels_list = res_dict['gt_labels']
-            gt_inds_list = res_dict['gt_inds']
-            gt_bboxes_list = res_dict['gt_bboxes']
-            gt_labels_list_full = res_dict['gt_labels_full']
-            shape_list = res_dict['shape']
-            num_gts_list = res_dict['num_gt']
-    else:
-        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list = predict(calib_loader, detector)
-        with open(f'{args.outpath}/results_inference_calib.json', 'w') as fout:
-            results = {
-                'bboxes' : bboxes_list,
-                'scores' : scores_list,
-                'gt_labels' : gt_labels_list,
-                'gt_inds' : gt_inds_list,
-                'gt_bboxes' : gt_bboxes_list,
-                'gt_labels_full' : gt_labels_list_full,
-                'shape' : shape_list,
-                'num_gt' : num_gts_list
-            }
-            json.dump(results, fout, indent = 6)
+    results_calib = get_inference(args, calib_loader, 'calib')
             
     score_thrs = np.linspace(0,1,81)[1:-1]
+    fnr_array = get_fnr(args, results_calib, score_thrs, 'calib')
 
-
-    if args.skip_fnr_computation:
-        fnr_array = np.load(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_calib.npy')
-    else:
-        if args.fnr_type=='pixel':
-            fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs)
-        elif args.fnr_type=='box':
-            fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, score_thrs)
-        elif args.fnr_type=='multilabel':
-            fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, score_thrs)
-            
-        fnr_array = np.array(fnr_array)
-        with open(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_calib.npy', 'wb') as fout:
-            np.save(fout, fnr_array)
-
-    # conformal risk control
+    ## conformal risk control ##
     n = fnr_array.shape[0]
     b = 1
     modified_fnr = (fnr_array.mean(axis=0)*n + b) / (n+1) # formula from Conformal Risk Control paper
@@ -220,7 +233,9 @@ def main(args):
         sys.exit('Exiting')
     score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
+    print('')
     print(f'{modified_fnr.min():.3f}', score_thr, f'{fnr_array.mean(axis=0)[score_thr_arg]:.3f}')
+    print('')
 
     # plot lambda calibration curve
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -232,62 +247,27 @@ def main(args):
     fig.savefig(f'{args.outpath}/{args.fnr_type}wise-fnr/FNR_vs_score_thr_calib.png')
 
 
-
     # validation
-    if args.skip_inference:
-        with open(f'{args.outpath}/results_inference_test.json', 'r') as fin:
-            res_dict = json.load(fin)
-            bboxes_list = res_dict['bboxes']
-            scores_list = res_dict['scores']
-            gt_labels_list = res_dict['gt_labels']
-            gt_inds_list = res_dict['gt_inds']
-            gt_bboxes_list = res_dict['gt_bboxes']
-            gt_labels_list_full = res_dict['gt_labels_full']
-            shape_list = res_dict['shape']
-            num_gts_list = res_dict['num_gt']
-    else:
-        test_loader = runner.test_dataloader
-        bboxes_list, scores_list, gt_labels_list, gt_inds_list, gt_bboxes_list, gt_labels_list_full, shape_list, num_gts_list = predict(test_loader, detector)
-        with open(f'{args.outpath}/results_inference_test.json', 'w') as fout:
-            results = {
-                'bboxes' : bboxes_list,
-                'scores' : scores_list,
-                'gt_labels' : gt_labels_list,
-                'gt_inds' : gt_inds_list,
-                'gt_bboxes' : gt_bboxes_list,
-                'gt_labels_full' : gt_labels_list_full,
-                'shape' : shape_list,
-                'num_gt' : num_gts_list
-            }
-            json.dump(results, fout, indent = 6)
+    test_loader = runner.test_dataloader
+    results_test = get_inference(args, test_loader, 'test')
 
-    if args.skip_fnr_computation:
-        fnr_array = np.load(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_test.npy')
-    else:
-        if args.fnr_type=='pixel':
-            fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, [score_thr])
-        elif args.fnr_type=='box':
-            fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, [score_thr])
-        elif args.fnr_type=='multilabel':
-            fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, [score_thr])
+    fnr_array = get_fnr(args, results_test, [score_thr], 'test')
 
-        fnr_array = np.array(fnr_array)
-        with open(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_test.npy', 'wb') as fout:
-            np.save(fout, fnr_array)
-
+    print('')
     print(fnr_array.mean(axis=0))
+    print('')
 
 
-    
+    #########################################################################################################################################################
     ## Apply cp to remaining bboxes
     with open(f'{args.outpath}/results_inference_calib.json', 'r') as fin:
         res_dict = json.load(fin)
         scores_list = res_dict['scores']
-        gt_labels_list = res_dict['gt_labels']
+        gt_labels_list_matched = res_dict['gt_labels']
 
     scores = []
     gt_labels = []
-    for s, l in zip(scores_list, gt_labels_list):
+    for s, l in zip(scores_list, gt_labels_list_matched):
         scores += s
         gt_labels += l
     
@@ -318,11 +298,11 @@ def main(args):
     with open(f'{args.outpath}/results_inference_test.json', 'r') as fin:
         res_dict = json.load(fin)
         scores_list = res_dict['scores']
-        gt_labels_list = res_dict['gt_labels']
+        gt_labels_list_matched = res_dict['gt_labels']
 
     scores = []
     gt_labels = []
-    for s, l in zip(scores_list, gt_labels_list):
+    for s, l in zip(scores_list, gt_labels_list_matched):
         scores += s
         gt_labels += l
     
