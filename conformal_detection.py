@@ -216,7 +216,9 @@ def main(args):
     )
 
     # calibration
+    blockPrint()
     calib_loader = runner.val_dataloader
+    enablePrint()
     results_calib = get_inference(args, calib_loader, 'calib')
             
     score_thrs = np.linspace(0,1,81)[1:-1]
@@ -234,7 +236,10 @@ def main(args):
     score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
     print('')
-    print(f'{modified_fnr.min():.3f}', score_thr, f'{fnr_array.mean(axis=0)[score_thr_arg]:.3f}')
+    print('CRC Calibration:')
+    print(f'minimum FNR = {modified_fnr.min():.3f}')
+    print(f'score threshold = {score_thr}')
+    print(f'FNR for alpha={args.alpha_crc} = {fnr_array.mean(axis=0)[score_thr_arg]:.3f}')
     print('')
 
     # plot lambda calibration curve
@@ -248,13 +253,16 @@ def main(args):
 
 
     # validation
+    blockPrint()
     test_loader = runner.test_dataloader
+    enablePrint()
     results_test = get_inference(args, test_loader, 'test')
 
     fnr_array = get_fnr(args, results_test, [score_thr], 'test')
 
     print('')
-    print(fnr_array.mean(axis=0))
+    print('CRC Test:')
+    print(f'FNR for alpha={args.alpha_crc} = {fnr_array.mean(axis=0)[0]:.3f}')
     print('')
 
 
@@ -323,6 +331,8 @@ def main(args):
 #    gt_labels_filtered[gt_labels_filtered==-1] = 12
 
     classes = ['0','1','2','3','4','5','6','7','8','9','10','11']
+    print(f'Conformity score threshold = {cs_thr:.3f}')
+    print('')
 
     # apply inverse sigmoid, then softmax to scores
     scores_filtered = np.log(scores_filtered / (1-scores_filtered))
@@ -344,9 +354,10 @@ def main(args):
     plot_coverage_per_class(covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
     plot_coverage_vs_size(size[gt_labels_filtered!=-1], covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
     plot_confusion_matrix(confusion_matrix, len(size), classes, f'{args.outpath}/{args.fnr_type}wise-fnr')
+    print(f'average set-size for matched bboxes = {size[mask_matched_test].mean():.3f}')
+    print(f'average set-size for unmatched bboxes = {size[~mask_matched_test].mean():.3f}')
+    print('')
 
-    print(f'average set-size for matched bboxes = {size[mask].mean():.3f}')
-    print(f'average set-size for unmatched bboxes = {size[~mask].mean():.3f}')
 
     fig, ax = plt.subplots(figsize=(12, 8))
     ax.set_xlabel('size')
