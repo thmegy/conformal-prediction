@@ -195,6 +195,38 @@ def get_fnr(args, results, score_thrs, dataset):
 
     return fnr_array
 
+
+
+def filter_results_for_cp(results, score_thr_crc, dataset):
+    scores_list = results['scores']
+    gt_labels_list_matched = results['gt_labels']
+
+    # modify structure from (image, bboxes) to (bboxes) --> flatten
+    scores = []
+    gt_labels = []
+    for s, l in zip(scores_list, gt_labels_list_matched):
+        scores += s
+        gt_labels += l
+    
+    scores = np.array(scores)
+    gt_labels = np.array(gt_labels)
+
+    # filter bboxes based on CRC score-threshold
+    mask_score_sum = (scores.sum(axis=1) > score_thr_crc)
+    scores_filtered = scores[mask_score_sum]
+    gt_labels_filtered = gt_labels[mask_score_sum]
+
+    mask_matched = gt_labels_filtered != -1 # select pred bboxes matched to a gt bbox
+    print(f'{mask_score_sum.sum()} remaining predicted bboxes in {dataset} dataset')
+    print(f'{mask_matched.sum()} matched, {mask_score_sum.sum()-mask_matched.sum()} unmatched')
+        
+    # apply inverse sigmoid, then softmax to scores
+    scores_filtered = np.log(scores_filtered / (1-scores_filtered))
+    scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
+
+    return scores_filtered, gt_labels_filtered, mask_matched
+
+
     
 
 
@@ -208,14 +240,17 @@ def main(args):
     runner = Runner.from_cfg(config)
     enablePrint()
 
-
     detector = mmdet.apis.init_detector(
         args.config,
         args.checkpoint,
         device=f'cuda:{args.gpu_id}',
     )
 
-    # calibration
+    #############################################################################
+    ####################### conformal risk control ##############################
+    #############################################################################
+
+    ## calibration ##
     blockPrint()
     calib_loader = runner.val_dataloader
     enablePrint()
@@ -224,14 +259,13 @@ def main(args):
     score_thrs = np.linspace(0,1,81)[1:-1]
     fnr_array = get_fnr(args, results_calib, score_thrs, 'calib')
 
-    ## conformal risk control ##
     n = fnr_array.shape[0]
     b = 1
     modified_fnr = (fnr_array.mean(axis=0)*n + b) / (n+1) # formula from Conformal Risk Control paper
-    score_thr_args = np.where( modified_fnr <= args.alpha )[0]
+    score_thr_args = np.where( modified_fnr <= args.alpha_crc )[0]
     
     if len(score_thr_args)==0:
-        print(f'Minimum modified FNR = {modified_fnr.min():.3f}. It is larger than the chosen significance level alpha = {args.alpha}.')
+        print(f'Minimum modified FNR = {modified_fnr.min():.3f}. It is larger than the chosen significance level alpha = {args.alpha_crc}.')
         sys.exit('Exiting')
     score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
@@ -251,8 +285,7 @@ def main(args):
     fig.set_tight_layout(True)
     fig.savefig(f'{args.outpath}/{args.fnr_type}wise-fnr/FNR_vs_score_thr_calib.png')
 
-
-    # validation
+    ## validation ##
     blockPrint()
     test_loader = runner.test_dataloader
     enablePrint()
@@ -266,104 +299,61 @@ def main(args):
     print('')
 
 
-    #########################################################################################################################################################
-    ## Apply cp to remaining bboxes
-    with open(f'{args.outpath}/results_inference_calib.json', 'r') as fin:
-        res_dict = json.load(fin)
-        scores_list = res_dict['scores']
-        gt_labels_list_matched = res_dict['gt_labels']
+    #################################################################################################################################
+    ###################################################### Apply CP to remaining bboxes #############################################
+    #################################################################################################################################
 
-    scores = []
-    gt_labels = []
-    for s, l in zip(scores_list, gt_labels_list_matched):
-        scores += s
-        gt_labels += l
-    
-    scores = np.array(scores)
-    gt_labels = np.array(gt_labels)
+    ## calibration ##
+    scores_filtered_calib, gt_labels_filtered_calib, mask_matched_calib = filter_results_for_cp(results_calib, score_thr, 'calib')
 
-    mask_score_sum = (scores.sum(axis=1) > score_thr)
-    scores_filtered = scores[mask_score_sum]
-    gt_labels_filtered = gt_labels[mask_score_sum]
+    cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores_filtered_calib[mask_matched_calib], gt_labels_filtered_calib[mask_matched_calib], args.alpha_cp, l=args.l, kreg=args.kreg)
+    np.save(f'{args.outpath}/{args.fnr_type}wise-fnr/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
 
-    mask = gt_labels_filtered != -1
-    print(f'{mask_score_sum.sum()} remaining predicted bboxes in calib dataset')
-    print(f'{mask.sum()} matched, {mask_score_sum.sum()-mask.sum()} unmatched')
-    
-#    empty_class = 1-scores_filtered.sum(axis=1)
-#    scores_filtered = np.hstack((scores_filtered, empty_class.reshape(-1,1)))
-#    gt_labels_filtered[gt_labels_filtered==-1] = 12
-    
-    # apply inverse sigmoid, then softmax to scores
-    scores_filtered = np.log(scores_filtered / (1-scores_filtered))
-    scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
-
-    # calibration    
-    cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores_filtered[mask], gt_labels_filtered[mask], 0.1, l=args.l, kreg=args.kreg)
-    print(f'Conformity score threshold = {cs_thr}')
-
-    # validation
-    with open(f'{args.outpath}/results_inference_test.json', 'r') as fin:
-        res_dict = json.load(fin)
-        scores_list = res_dict['scores']
-        gt_labels_list_matched = res_dict['gt_labels']
-
-    scores = []
-    gt_labels = []
-    for s, l in zip(scores_list, gt_labels_list_matched):
-        scores += s
-        gt_labels += l
-    
-    scores = np.array(scores)
-    gt_labels = np.array(gt_labels)
-
-    mask_score_sum = (scores.sum(axis=1) > score_thr)
-    scores_filtered = scores[mask_score_sum]
-    gt_labels_filtered = gt_labels[mask_score_sum]
-
-    mask = gt_labels_filtered != -1
-    print(f'{mask_score_sum.sum()} remaining predicted bboxes in test dataset')
-    print(f'{mask.sum()} matched, {mask_score_sum.sum()-mask.sum()} unmatched')
     print('')
-    
-#    empty_class = 1-scores_filtered.sum(axis=1)
-#    scores_filtered = np.hstack((scores_filtered, empty_class.reshape(-1,1)))
-#    gt_labels_filtered[gt_labels_filtered==-1] = 12
-
-    classes = ['0','1','2','3','4','5','6','7','8','9','10','11']
     print(f'Conformity score threshold = {cs_thr:.3f}')
     print('')
 
-    # apply inverse sigmoid, then softmax to scores
-    scores_filtered = np.log(scores_filtered / (1-scores_filtered))
-    scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
     
-
-    prediction_set_list, size, credibility, confidence, ranking, covered, confusion_matrix = get_prediction_set(scores_filtered, cs_thr,
+    ## validation ##
+    scores_filtered_test, gt_labels_filtered_test, mask_matched_test = filter_results_for_cp(results_test, score_thr, 'test')
+    
+    prediction_set_list, size, credibility, confidence, ranking, covered, confusion_matrix = get_prediction_set(scores_filtered_test, cs_thr,
                                                                                                                 true_class_conformity_scores, l=args.l,
-                                                                                                                kreg=args.kreg, gt_labels=gt_labels_filtered)
+                                                                                                                kreg=args.kreg, gt_labels=gt_labels_filtered_test)
 
-    np.save(f'{args.outpath}/{args.fnr_type}wise-fnr/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
-
-#    argmax = scores.argmax(axis=1)
-#    print(compute_accuracy(argmax,gt_labels))
-#    print(covered.sum() / len(covered))
-#    print(np.unique(size, return_counts=True))
-
-    plot_uncertainty_vs_difficulty('size', ranking, size[gt_labels_filtered!=-1], gt_labels_filtered, classes, f'{args.outpath}/{args.fnr_type}wise-fnr')
-    plot_coverage_per_class(covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
-    plot_coverage_vs_size(size[gt_labels_filtered!=-1], covered, gt_labels_filtered[gt_labels_filtered!=-1], classes, args.alpha, f'{args.outpath}/{args.fnr_type}wise-fnr')
-    plot_confusion_matrix(confusion_matrix, len(size), classes, f'{args.outpath}/{args.fnr_type}wise-fnr')
     print(f'average set-size for matched bboxes = {size[mask_matched_test].mean():.3f}')
     print(f'average set-size for unmatched bboxes = {size[~mask_matched_test].mean():.3f}')
     print('')
+    
+    classes = test_loader.dataset.metainfo['classes']
+    plot_uncertainty_vs_difficulty('size',
+                                   ranking,
+                                   size[mask_matched_test],
+                                   gt_labels_filtered_test,
+                                   classes,
+                                   f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_coverage_per_class(covered,
+                            gt_labels_filtered_test[mask_matched_test],
+                            classes,
+                            args.alpha_cp,
+                            f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_coverage_vs_size(size[mask_matched_test],
+                          covered,
+                          gt_labels_filtered_test[mask_matched_test],
+                          classes,
+                          args.alpha_cp,
+                          f'{args.outpath}/{args.fnr_type}wise-fnr')
+    plot_confusion_matrix(confusion_matrix,
+                          len(size),
+                          classes,
+                          f'{args.outpath}/{args.fnr_type}wise-fnr')
 
 
     fig, ax = plt.subplots(figsize=(12, 8))
     ax.set_xlabel('size')
     bins = np.arange(size.max())+1
-    ax.hist(size[gt_labels_filtered!=-1], bins=bins, density=True, alpha=0.5, label='matched bboxes')
-    ax.hist(size[gt_labels_filtered==-1], bins=bins, density=True, alpha=0.5, label='unmatched bboxes')
+    ax.hist(size[mask_matched_test], bins=bins, density=True, alpha=0.5, label='matched bboxes')
+    ax.hist(size[~mask_matched_test], bins=bins, density=True, alpha=0.5, label='unmatched bboxes')
 
     ax.legend()
     fig.set_tight_layout(True)
@@ -380,7 +370,8 @@ if __name__ == "__main__":
     parser.add_argument("--outpath", required=True, help="Path to output directory")
     parser.add_argument("--gpu-id", default='0', help="ID of gpu to be used")
     
-    parser.add_argument("--alpha", type=float, default=0.1, help="significance level")
+    parser.add_argument("--alpha_crc", type=float, default=0.25, help="significance level for Conformal Risk Control")
+    parser.add_argument("--alpha_cp", type=float, default=0.1, help="significance level for Conformal Prediction")
     parser.add_argument("--l", type=float, default=0., help="lambda parameter for regularisation of conformality score")
     parser.add_argument("--kreg", type=float, default=0., help="kreg parameter for regularisation of conformality score")
 
