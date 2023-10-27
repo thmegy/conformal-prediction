@@ -214,12 +214,23 @@ def main(args):
     b = 1
     modified_fnr = (fnr_array.mean(axis=0)*n + b) / (n+1) # formula from Conformal Risk Control paper
     score_thr_args = np.where( modified_fnr <= args.alpha )[0]
+    
     if len(score_thr_args)==0:
         print(f'Minimum modified FNR = {modified_fnr.min():.3f}. It is larger than the chosen significance level alpha = {args.alpha}.')
         sys.exit('Exiting')
     score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
     print(f'{modified_fnr.min():.3f}', score_thr, f'{fnr_array.mean(axis=0)[score_thr_arg]:.3f}')
+
+    # plot lambda calibration curve
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlabel(r'$\lambda$')
+    ax.set_ylabel(r'FNR')
+    ax.plot(score_thrs, fnr_array.mean(axis=0))
+
+    fig.set_tight_layout(True)
+    fig.savefig(f'{args.outpath}/{args.fnr_type}wise-fnr/FNR_vs_score_thr_calib.png')
+
 
 
     # validation
