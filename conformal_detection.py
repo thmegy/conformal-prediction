@@ -192,11 +192,11 @@ def main(args):
             }
             json.dump(results, fout, indent = 6)
             
-    score_thrs = np.linspace(0,1,21)[1:-1]
+    score_thrs = np.linspace(0,1,81)[1:-1]
 
 
     if args.skip_fnr_computation:
-        fnr_array = np.load(f'{args.outpath}/fnr_calib_{args.fnr_type}wise.npy')
+        fnr_array = np.load(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_calib.npy')
     else:
         if args.fnr_type=='pixel':
             fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_thrs)
@@ -206,10 +206,9 @@ def main(args):
             fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, score_thrs)
             
         fnr_array = np.array(fnr_array)
-        with open(f'{args.outpath}/fnr_calib_{args.fnr_type}wise.npy', 'wb') as fout:
+        with open(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_calib.npy', 'wb') as fout:
             np.save(fout, fnr_array)
 
-    print(fnr_array)
     # conformal risk control
     n = fnr_array.shape[0]
     b = 1
@@ -220,7 +219,7 @@ def main(args):
         sys.exit('Exiting')
     score_thr_arg = score_thr_args[-1]
     score_thr = score_thrs[score_thr_arg]
-    print(score_thr_arg, score_thr)
+    print(f'{modified_fnr.min():.3f}', score_thr, f'{fnr_array.mean(axis=0)[score_thr_arg]:.3f}')
 
 
     # validation
@@ -251,14 +250,19 @@ def main(args):
             }
             json.dump(results, fout, indent = 6)
 
-    if args.fnr_type=='pixel':
-        fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, [score_thr])
-    elif args.fnr_type=='box':
-        fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, [score_thr])
-    elif args.fnr_type=='multilabel':
-        fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, [score_thr])
+    if args.skip_fnr_computation:
+        fnr_array = np.load(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_test.npy')
+    else:
+        if args.fnr_type=='pixel':
+            fnr_array = pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, [score_thr])
+        elif args.fnr_type=='box':
+            fnr_array = boxwise_fnr(scores_list, gt_inds_list, num_gts_list, [score_thr])
+        elif args.fnr_type=='multilabel':
+            fnr_array = multilabel_fnr(scores_list, gt_labels_list_full, [score_thr])
 
-    fnr_array = np.array(fnr_array)
+        fnr_array = np.array(fnr_array)
+        with open(f'{args.outpath}/{args.fnr_type}wise-fnr/fnr_test.npy', 'wb') as fout:
+            np.save(fout, fnr_array)
 
     print(fnr_array.mean(axis=0))
 
@@ -388,6 +392,6 @@ if __name__ == "__main__":
 #    parser.add_argument('--post-process', action='store_true', help='Make summary plots without processing videos again.')
     args = parser.parse_args()
 
-    os.makedirs(args.outpath, exist_ok=True)
+    os.makedirs(f'{args.outpath}/{args.fnr_type}wise-fnr', exist_ok=True)
     
     main(args)
