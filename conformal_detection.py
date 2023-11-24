@@ -76,10 +76,7 @@ def pixelwise_fnr(bboxes_list, scores_list, gt_bboxes_list, shape_list, score_th
     Compute False Negative Rate as fraction of ground-truth bboxes not covered by predicted bboxes.
     '''
     fnr_array = []
-    for i, (pred_bboxes, scores, gt_bboxes, shape) in enumerate(tqdm.tqdm(zip(bboxes_list, scores_list, gt_bboxes_list, shape_list), total=len(bboxes_list))): # loop on images
-        #if i > 100:
-        #    break
-
+    for pred_bboxes, scores, gt_bboxes, shape in tqdm.tqdm(zip(bboxes_list, scores_list, gt_bboxes_list, shape_list), total=len(bboxes_list)): # loop on images
         if len(gt_bboxes)==0:
             continue
 
@@ -197,7 +194,7 @@ def get_fnr(args, results, score_thrs, dataset):
 
 
 
-def filter_results_for_cp(results, score_thr_crc, dataset):
+def filter_results_for_cp(args, results, score_thr_crc, dataset):
     scores_list = results['scores']
     gt_labels_list_matched = results['gt_labels']
 
@@ -212,7 +209,10 @@ def filter_results_for_cp(results, score_thr_crc, dataset):
     gt_labels = np.array(gt_labels)
 
     # filter bboxes based on CRC score-threshold
-    mask_score_sum = (scores.sum(axis=1) > score_thr_crc)
+    if args.fnr_type=='multilabel':
+        mask_score_sum = (scores.max(axis=1) > score_thr_crc)
+    else:
+        mask_score_sum = (scores.sum(axis=1) > score_thr_crc)
     scores_filtered = scores[mask_score_sum]
     gt_labels_filtered = gt_labels[mask_score_sum]
 
@@ -224,10 +224,7 @@ def filter_results_for_cp(results, score_thr_crc, dataset):
     scores_filtered = np.log(scores_filtered / (1-scores_filtered))
     scores_filtered = (np.exp(scores_filtered).T / np.exp(scores_filtered).sum(axis=1)).T
 
-    return scores_filtered, gt_labels_filtered, mask_matched
-
-
-    
+    return scores_filtered, gt_labels_filtered, mask_matched    
 
 
 
@@ -255,8 +252,27 @@ def main(args):
     calib_loader = runner.val_dataloader
     enablePrint()
     results_calib = get_inference(args, calib_loader, 'calib')
-            
-    score_thrs = np.linspace(0,1,81)[1:-1]
+
+    # determine score thresholds --> need maximum objectness-score
+    if args.fnr_type == 'multilabel':
+        max_score = 1
+    else:
+        max_score = 0
+        for im_scores in results_calib['scores']:
+            im_scores = np.array(im_scores)
+            try:
+                max_tmp = im_scores.sum(axis=1).max()
+                if max_tmp > max_score:
+                    max_score = max_tmp
+            except:
+                pass
+    
+    print('')
+    print(f'Maximum objectness-score = {max_score:.3f}')
+    print('')
+        
+    score_thrs = np.linspace(0,max_score,81)[1:-1]
+    
     fnr_array = get_fnr(args, results_calib, score_thrs, 'calib')
 
     n = fnr_array.shape[0]
@@ -304,7 +320,7 @@ def main(args):
     #################################################################################################################################
 
     ## calibration ##
-    scores_filtered_calib, gt_labels_filtered_calib, mask_matched_calib = filter_results_for_cp(results_calib, score_thr, 'calib')
+    scores_filtered_calib, gt_labels_filtered_calib, mask_matched_calib = filter_results_for_cp(args, results_calib, score_thr, 'calib')
 
     cs_thr, true_class_conformity_scores = calibrate_cp_threshold(scores_filtered_calib[mask_matched_calib], gt_labels_filtered_calib[mask_matched_calib], args.alpha_cp, l=args.l, kreg=args.kreg)
     np.save(f'{args.outpath}/{args.fnr_type}wise-fnr/true_class_conformity_scores_calib.npy', true_class_conformity_scores)
@@ -315,7 +331,7 @@ def main(args):
 
     
     ## validation ##
-    scores_filtered_test, gt_labels_filtered_test, mask_matched_test = filter_results_for_cp(results_test, score_thr, 'test')
+    scores_filtered_test, gt_labels_filtered_test, mask_matched_test = filter_results_for_cp(args, results_test, score_thr, 'test')
     
     prediction_set_list, size, credibility, confidence, ranking, covered, confusion_matrix = get_prediction_set(scores_filtered_test, cs_thr,
                                                                                                                 true_class_conformity_scores, l=args.l,

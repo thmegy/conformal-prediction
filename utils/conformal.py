@@ -141,10 +141,12 @@ def plot_uncertainty_vs_difficulty(unc_type, ranking, uncertainty, target, class
 
         ticks_unc = np.linspace(1, len(bins)-1, len(bins)-1).astype(int)
         c = ax.pcolor(uncertainty_matrix / uncertainty_matrix.sum(axis=0), cmap='Greens')
-        for irow in range(uncertainty_matrix.shape[0]):
-            for icol in range(uncertainty_matrix.shape[1]):
-                ax.text(icol+0.5, irow+0.5, f'{int(uncertainty_matrix[irow][icol])}',
-                           ha="center", va="center", color="black")
+
+        if len(bins) < 20 and max_ranking<20:
+            for irow in range(uncertainty_matrix.shape[0]):
+                for icol in range(uncertainty_matrix.shape[1]):
+                    ax.text(icol+0.5, irow+0.5, f'{int(uncertainty_matrix[irow][icol])}',
+                               ha="center", va="center", color="black")
 
         mean = ticks_unc @ uncertainty_matrix / uncertainty_matrix.sum(axis=0)
         ticks_rank = np.linspace(0, max_ranking, max_ranking+1).astype(int)
@@ -276,18 +278,22 @@ def plot_confusion_matrix(confusion_matrix, n_sample, classes, outpath):
 
     fraction_bboxes = (np.diag(confusion_matrix) / n_sample).reshape(len(classes),1)
     ax[0].pcolor( fraction_bboxes, **opts)
-    for irow in range(fraction_bboxes.shape[0]):
-        for icol in range(fraction_bboxes.shape[1]):
-            ax[0].text(icol+0.5, irow+0.5, '{:.2f}'.format(fraction_bboxes[irow][icol]),
-                       ha="center", va="center", color="black")
-            ax[0].set_xticks([0.5])
-            ax[0].set_xticklabels(['fraction of bboxes'], rotation=45, ha='right')
+
+    if confusion_matrix.shape[0] < 20:
+        for irow in range(fraction_bboxes.shape[0]):
+            for icol in range(fraction_bboxes.shape[1]):
+                ax[0].text(icol+0.5, irow+0.5, '{:.2f}'.format(fraction_bboxes[irow][icol]),
+                           ha="center", va="center", color="black")
+                ax[0].set_xticks([0.5])
+                ax[0].set_xticklabels(['fraction of bboxes'], rotation=45, ha='right')
 
     heatmap = ax[1].pcolor(matrix_normalised, **opts)
-    for irow in range(matrix_normalised.shape[0]):
-        for icol in range(matrix_normalised.shape[1]):
-            ax[1].text(icol+0.5, irow+0.5, '{:.2f}'.format(matrix_normalised[irow][icol]),
-                       ha="center", va="center", color="black")
+
+    if confusion_matrix.shape[0] < 20:
+        for irow in range(matrix_normalised.shape[0]):
+            for icol in range(matrix_normalised.shape[1]):
+                ax[1].text(icol+0.5, irow+0.5, '{:.2f}'.format(matrix_normalised[irow][icol]),
+                           ha="center", va="center", color="black")
 
     ax[1].set_yticks(np.arange(0.5, matrix_normalised.shape[0], 1))
     ax[1].set_yticklabels(classes)
