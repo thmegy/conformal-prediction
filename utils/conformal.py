@@ -84,7 +84,7 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
     confidence_list = []
     confusion_matrix = np.zeros((scores.shape[1],scores.shape[1]))
 
-    for cs, idxs, gt_label, score in zip(conformity_scores, sorted_idxs, gt_labels, scores): #loop over samples
+    for i, (cs, idxs, score) in enumerate(zip(conformity_scores, sorted_idxs, scores)): #loop over samples
         score = score[idxs] # sort scores in descending order
         
         n_selected = (cs<=threshold).sum() + 1
@@ -102,7 +102,7 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
             prediction_set = idxs[:n_selected]
         if len(prediction_set)==0:
             prediction_set = np.array([idxs[0]])
-        prediction_set_list.append(prediction_set)
+        prediction_set_list.append(prediction_set.tolist())
             
         size_list.append(len(prediction_set))
         credibility_list.append( (calib_cs_distrib > cs[0]).sum() / len(calib_cs_distrib) )
@@ -113,9 +113,9 @@ def get_prediction_set(scores, threshold, calib_cs_distrib, l=0., kreg=0., gt_la
         prediction_set_vector[prediction_set] = 1
         confusion_matrix[prediction_set] += prediction_set_vector
 
-        if gt_labels is not None and gt_label!=-1:
-            ranking_list.append(np.where(idxs==gt_label)[0].item())
-            covered_list.append(gt_label.item() in prediction_set)
+        if gt_labels is not None and gt_labels[i]!=-1:
+            ranking_list.append(np.where(idxs==gt_labels[i])[0].item())
+            covered_list.append(gt_labels[i].item() in prediction_set)
             
     if gt_labels is not None:
         return prediction_set_list, np.array(size_list), np.array(credibility_list), np.array(confidence_list), np.array(ranking_list), np.array(covered_list), confusion_matrix
